@@ -1,6 +1,7 @@
 const express = require('express');
 const app = express();
-const userRoutes = require('./routes/userRoutes')
+const userRoutes = require('./routes/userRoutes');
+const { connectDB } = require('./connection');
 const User = require('./models/User');
 const Message = require('./models/Message')
 const rooms = ['general', 'tech', 'finance', 'crypto'];
@@ -8,10 +9,28 @@ const cors = require('cors');
 
 app.use(express.urlencoded({extended: true}));
 app.use(express.json());
-app.use(cors());
+app.options('http://localhost:3000', cors())
 
-app.use('/users', userRoutes)
-require('./connection')
+
+var allowlist = ['http://localhost:3000']
+let whitelist = ['http://localhost:3000','http://localhost:80'];
+let corsOptions = {
+    origin: (origin, callback)=>{
+        if (whitelist.indexOf(origin) !== -1) {
+            callback(null, true)
+        } else {
+            callback(new Error('Not allowed by CORS'))
+        }
+    },credentials: true
+}
+app.use(cors(corsOptions));
+
+// app.use(cors({origin: 'http://localhost:3000'}));
+
+app.use('/users',  userRoutes)
+
+// Connect to MongoDB
+connectDB();
 
 const server = require('http').createServer(app);
 const PORT = 5001;
@@ -61,14 +80,19 @@ io.on('connection', (socket)=> {
   })
 
   socket.on('message-room', async(room, content, sender, time, date) => {
-    const newMessage = await Message.create({content, from: sender, time, date, to: room});
-    let roomMessages = await getLastMessagesFromRoom(room);
-    roomMessages = sortRoomMessagesByDate(roomMessages);
-    // sending message to room
-    io.to(room).emit('room-messages', roomMessages);
-    socket.broadcast.emit('notifications', room)
-  })
+    try {
+        // Create a new message object
+        const newMessage = new Message({ content, from: sender, time, date, to: room });
+        roomMessages = sortRoomMessagesByDate(roomMessages);
+        // Save the message to the database
+        await newMessage.save();
 
+        // Emit the message to all clients in the room
+        io.to(room).emit('new-message', newMessage);
+    } catch (error) {
+        console.error('Error saving message:', error);
+    }
+});
   app.delete('/logout', async(req, res)=> {
     try {
       const {_id, newMessages} = req.body;
